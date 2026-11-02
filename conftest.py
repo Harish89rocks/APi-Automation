@@ -1,4 +1,6 @@
+import json
 import os
+from pathlib import Path
 
 import pytest
 import requests
@@ -6,6 +8,7 @@ from fastapi.testclient import TestClient
 
 from api_client import APIClient
 from contract_utils import spec_from_env
+from evidence import EvidenceRecorder, redact_text, render_html, safe_filename
 from practice_api import app
 
 DEFAULT_EXTERNAL_API_URL = "https://jsonplaceholder.typicode.com"
@@ -52,3 +55,41 @@ def api_session():
     session = requests.Session()
     yield session
     session.close()
+
+
+# ---- defect evidence --------------------------------------------------------------------
+EVIDENCE_DIR = Path(os.getenv("EVIDENCE_DIR", "artifacts/evidence"))
+
+
+@pytest.fixture(autouse=True)
+def _http_evidence(request):
+    """Record (redacted) HTTP exchanges of every test; kept only if it fails."""
+    recorder = EvidenceRecorder()
+    request.node._evidence = recorder
+    with recorder.active():
+        yield
+
+
+@pytest.hookimpl(hookwrapper=True)
+def pytest_runtest_makereport(item, call):
+    outcome = yield
+    report = outcome.get_result()
+    recorder = getattr(item, "_evidence", None)
+    if report.when != "call" or not report.failed or recorder is None:
+        return
+    EVIDENCE_DIR.mkdir(parents=True, exist_ok=True)
+    path = EVIDENCE_DIR / f"{safe_filename(item.nodeid)}.json"
+    path.write_text(
+        json.dumps({"test": item.nodeid, "failure": redact_text(str(report.longrepr)[-3000:]),
+                    "exchanges": recorder.exchanges}, indent=2),
+        encoding="utf-8",
+    )
+    try:
+        from pytest_html import extras
+
+        report.extras = getattr(report, "extras", []) + [
+            extras.html(render_html(recorder.exchanges)),
+            extras.json(recorder.exchanges, name="http-evidence"),
+        ]
+    except ImportError:
+        pass

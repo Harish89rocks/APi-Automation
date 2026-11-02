@@ -148,3 +148,13 @@ wrong-key/`alg=none` tokens, scopes, roles, spoofing, error-shape and informatio
 has a timeout and uploads JUnit XML + HTML reports (`if: always()`). Optional secrets/variables for the external job:
 `OPENAPI_SPEC_URL`, `OPENAPI_BASELINE_SPEC`, `DEPLOYED_API_URL`, `DEPLOYED_API_ENV`, `CLICKHOUSE_*`, `SNOWFLAKE_*`
 (Settings → Secrets and variables → Actions). No step prints the environment.
+
+### Defect evidence (failed tests)
+Every test's HTTP traffic (`requests`, `httpx`, `httpx2`; sync and async) is recorded in memory. **Only when a test
+fails** it is written to `artifacts/evidence/<test>.json` (override with `EVIDENCE_DIR`) and embedded in the
+pytest-html report (collapsible request/response list plus a JSON attachment). Each record has method, URL, status,
+headers, bodies (truncated at 4000 chars) and latency. Secrets are redacted before storage: authorization/cookie/
+token/secret/password/api-key headers and JSON/form fields, JWTs, bearer values, URL credentials and sensitive
+query values; the failure traceback is redacted too. Redaction is pattern-based; review evidence before sharing it
+outside the team. CI already uploads `artifacts/`, so evidence ships with each job's report artifact.
+Run: `pytest -m "not external" --html=artifacts/report.html --self-contained-html`.
