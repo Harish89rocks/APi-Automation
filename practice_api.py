@@ -1,7 +1,10 @@
 from fastapi import FastAPI
 from pydantic import BaseModel, EmailStr, Field, field_validator
 
+from auth_api import router as auth_router
+
 app = FastAPI(title="QA Negative Testing Practice API")
+app.include_router(auth_router)
 
 MAX_EMAIL_LOCAL_PART = 64  # RFC 5321
 

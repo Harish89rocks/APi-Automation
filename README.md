@@ -27,6 +27,7 @@ so they are safe on a shared database. Use a dedicated test database/user regard
 
 | Variable | Purpose |
 |---|---|
+| `AUTH_JWT_SECRET` / `AUTH_TOKEN_TTL_S` | Practice API token signing key (random per process if unset) and token lifetime (default 300s) |
 | `DEPLOYED_API_URL` | Running instance (Docker/Compose, or `kubectl port-forward`) for `deployment` tests |
 | `DEPLOYED_API_WAIT` / `DEPLOYED_API_MAX_LATENCY_S` | Readiness wait and latency budget for deployment tests |
 | `AWS_ENDPOINT_URL` | LocalStack-style endpoint; default is in-process moto mock |
@@ -58,6 +59,7 @@ Never commit credentials; supply any future secrets through environment variable
 | `aws` | S3/Lambda/RDS/CloudWatch (moto by default) |
 | `warehouse` | Snowflake/ClickHouse live checks; validator logic tests run offline |
 | `ai` | AI/ML schema, latency and quality evaluation; live tests need `AI_API_URL` |
+| `auth` | OAuth2 client-credentials + JWT authentication/authorization (`auth_api.py`, `tests/test_auth_jwt.py`) |
 | `contract` | OpenAPI/schema contract checks (`contract_utils.py`) |
 | `database` | Needs PostgreSQL (`services/`); skipped when unconfigured |
 | `external` | Calls a real third-party API; requires internet |

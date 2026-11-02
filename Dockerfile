@@ -8,7 +8,7 @@ WORKDIR /app
 COPY requirements-app.txt .
 RUN pip install --no-cache-dir -r requirements-app.txt
 
-COPY practice_api.py .
+COPY practice_api.py auth_api.py ./
 
 RUN useradd --system --uid 10001 appuser
 USER appuser
