@@ -4,11 +4,14 @@ from pathlib import Path
 
 import pytest
 
+from optional_deps import require_module
+from services.config import ConfigurationError
 from services.data_validation import DataValidator, run_table_checks
 from services.warehouse import (
     ClickHouseSettings,
     SnowflakeSettings,
     clickhouse_query,
+    ensure_read_only,
     snowflake_query,
 )
 
@@ -25,25 +28,33 @@ def load_specs(warehouse: str) -> list[dict]:
     )
 
 
+def settings_or_skip(settings_class):
+    """Skip when absent; fail when partly configured."""
+    try:
+        return settings_class.from_env()
+    except ConfigurationError as error:
+        pytest.fail(str(error), pytrace=False)
+
+
 @pytest.fixture
 def snowflake():
-    settings = SnowflakeSettings.from_env()
+    settings = settings_or_skip(SnowflakeSettings)
     if settings is None:
         pytest.skip(
             "Snowflake not configured (SNOWFLAKE_ACCOUNT, SNOWFLAKE_USER and "
             "SNOWFLAKE_PASSWORD or SNOWFLAKE_PRIVATE_KEY_PATH)"
         )
-    pytest.importorskip("snowflake.connector")
+    require_module("snowflake.connector")
     with snowflake_query(settings) as query:
         yield DataValidator(query), query
 
 
 @pytest.fixture
 def clickhouse():
-    settings = ClickHouseSettings.from_env()
+    settings = settings_or_skip(ClickHouseSettings)
     if settings is None:
         pytest.skip("ClickHouse not configured (CLICKHOUSE_HOST)")
-    pytest.importorskip("clickhouse_connect")
+    require_module("clickhouse_connect")
     with clickhouse_query(settings) as query:
         yield DataValidator(query), query
 
@@ -91,17 +102,60 @@ def test_clickhouse_tables_meet_expectations(clickhouse):
 # ---- settings parsing (no network) ---------------------------------------------------
 
 
+@pytest.fixture
+def clean_warehouse_env(monkeypatch):
+    for name in list(os.environ):
+        if name.startswith(("SNOWFLAKE_", "CLICKHOUSE_")):
+            monkeypatch.delenv(name)
+
+
 @pytest.mark.unit
-def test_snowflake_settings_need_a_credential(monkeypatch):
-    for name in ("SNOWFLAKE_PASSWORD", "SNOWFLAKE_PRIVATE_KEY_PATH"):
-        monkeypatch.delenv(name, raising=False)
+def test_unconfigured_warehouses_are_absent_not_errors(clean_warehouse_env):
+    assert SnowflakeSettings.from_env() is None
+    assert ClickHouseSettings.from_env() is None
+
+
+@pytest.mark.unit
+def test_snowflake_without_credential_is_a_configuration_error(clean_warehouse_env, monkeypatch):
     monkeypatch.setenv("SNOWFLAKE_ACCOUNT", "acct")
     monkeypatch.setenv("SNOWFLAKE_USER", "qa")
 
-    assert SnowflakeSettings.from_env() is None
+    with pytest.raises(ConfigurationError, match="SNOWFLAKE_PASSWORD or SNOWFLAKE_PRIVATE_KEY_PATH"):
+        SnowflakeSettings.from_env()
 
     monkeypatch.setenv("SNOWFLAKE_PRIVATE_KEY_PATH", "/keys/qa.p8")
     assert SnowflakeSettings.from_env().private_key_path == "/keys/qa.p8"
+
+
+@pytest.mark.unit
+def test_partly_configured_warehouses_are_configuration_errors(clean_warehouse_env, monkeypatch):
+    monkeypatch.setenv("SNOWFLAKE_WAREHOUSE", "WH")
+    with pytest.raises(ConfigurationError, match="SNOWFLAKE_ACCOUNT"):
+        SnowflakeSettings.from_env()
+
+    monkeypatch.setenv("CLICKHOUSE_USER", "qa")
+    with pytest.raises(ConfigurationError, match="CLICKHOUSE_HOST"):
+        ClickHouseSettings.from_env()
+
+
+@pytest.mark.unit
+@pytest.mark.parametrize(
+    "sql",
+    ["SELECT 1", "  select count(*) from t;", "WITH x AS (SELECT 1) SELECT * FROM x", "SHOW TABLES"],
+)
+def test_read_only_statements_are_allowed(sql):
+    assert ensure_read_only(sql) == sql
+
+
+@pytest.mark.unit
+@pytest.mark.parametrize(
+    "sql",
+    ["DROP TABLE t", "DELETE FROM t", "INSERT INTO t VALUES (1)", "SELECT 1; DROP TABLE t",
+     "UPDATE t SET a=1", "TRUNCATE t", "-- hi\nDROP TABLE t", ""],
+)
+def test_write_statements_are_rejected(sql):
+    with pytest.raises(ValueError, match="read-only"):
+        ensure_read_only(sql)
 
 
 @pytest.mark.unit

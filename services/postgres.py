@@ -8,7 +8,7 @@ from pathlib import Path
 import psycopg
 from psycopg import sql
 
-from services.config import PostgresSettings
+from services.config import ConfigurationError, PostgresSettings
 
 SCHEMA_FILE = Path(__file__).parent / "sql" / "users_schema.sql"
 CONNECT_TIMEOUT_SECONDS = 5
@@ -48,3 +48,17 @@ def connect_to_schema(
         options=f"-c search_path={schema}",
         connect_timeout=CONNECT_TIMEOUT_SECONDS,
     )
+
+
+def check_connection(settings: PostgresSettings) -> None:
+    """Raise ConfigurationError with an actionable message if the DB is unreachable."""
+    try:
+        with psycopg.connect(settings.dsn, connect_timeout=CONNECT_TIMEOUT_SECONDS) as conn:
+            conn.execute("SELECT 1")
+    except psycopg.Error as error:
+        detail = (str(error).strip().splitlines() or [type(error).__name__])[0]
+        raise ConfigurationError(
+            "PostgreSQL is configured but the connection failed "
+            f"({type(error).__name__}: {detail}). Check POSTGRES_DSN/POSTGRES_HOST, "
+            "credentials and that the test database is running."
+        ) from None

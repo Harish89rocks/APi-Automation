@@ -1,7 +1,7 @@
 import pytest
 
-from services.config import PostgresSettings
-from services.postgres import connect_to_schema, isolated_schema
+from services.config import ConfigurationError, PostgresSettings
+from services.postgres import check_connection, connect_to_schema, isolated_schema
 
 
 @pytest.fixture(scope="session")
@@ -11,6 +11,12 @@ def postgres_settings() -> PostgresSettings:
         pytest.skip(
             "PostgreSQL not configured (set POSTGRES_DSN or POSTGRES_HOST)"
         )
+    try:
+        settings.require_dedicated_test_database()
+        check_connection(settings)
+    except ConfigurationError as error:
+        # Configured but unusable is a failure, never a silent skip.
+        pytest.fail(str(error), pytrace=False)
     return settings
 
 

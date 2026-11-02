@@ -80,3 +80,71 @@ DEPLOYED_API_URL=http://localhost:8000 pytest -m deployment    # after `docker c
 AI_API_URL=https://host AI_EVAL_CASES_FILE=ai_eval_cases.example.json pytest -m ai
 pytest -m "not external" --html=artifacts/report.html --self-contained-html
 ```
+
+## Integration setup and safety rules
+
+All values below are **placeholders**. Never commit real credentials; use environment variables or CI secrets.
+
+**Rule of thumb:** *absent* configuration → the suite is **skipped**; *present but broken or partial* configuration
+→ the suite **fails** with an actionable message (it never silently skips).
+
+| Situation | Result |
+|---|---|
+| Optional integration not configured | skipped (reason shown with `-ra`) |
+| Configured but unreachable / invalid / partial | **failed** |
+| Optional Python package missing (boto3, moto, …) | skipped locally; **failed** when `REQUIRE_OPTIONAL_DEPS=1` (set in CI) |
+| Assertion fails | failed |
+| `xfail` / `xpass` | known defect still failing / now fixed (investigate) |
+
+### Local setup (offline)
+```bash
+python3.11 -m venv .venv && source .venv/bin/activate
+pip install -r requirements-cloud.txt     # superset: framework + boto3/moto/Snowflake/ClickHouse
+pytest -ra -m "not external and not database and not deployment"
+```
+`requirements.txt` includes `httpx2`, which removes Starlette's "Using httpx with starlette.testclient is
+deprecated" warning (the only warning observed; it originated in `fastapi/testclient.py`).
+
+### PostgreSQL
+`POSTGRES_DSN=postgresql://USER:PASSWORD@HOST:5432/qa_test` or `POSTGRES_HOST/_PORT/_DB/_USER/_PASSWORD`.
+The database name must contain `test` or start with `qa`, else tests refuse to run
+(override deliberately with `POSTGRES_ALLOW_NON_TEST_DB=1`). Tests only touch a per-run `qa_<uuid>` schema inside a
+rolled-back transaction. Run: `pytest -ra -m database`.
+Quick local DB: `docker run -d -p 5432:5432 -e POSTGRES_DB=qa_test -e POSTGRES_PASSWORD=CHANGE_ME postgres:16-alpine`.
+
+### AWS (S3 / Lambda / RDS / CloudWatch)
+`boto3`/`moto` are in `requirements-cloud.txt`. Default is an in-process mock; `AWS_ENDPOINT_URL` targets LocalStack.
+`AWS_TEST_MODE=real` additionally **requires** `AWS_TEST_ALLOWED_ACCOUNT_ID=<sandbox account id>` (checked via STS).
+Buckets are created with prefix `AWS_TEST_BUCKET_PREFIX` (default `qa-`) and cleanup refuses to touch any other bucket.
+Run: `pytest -ra -m aws`.
+
+### Deployed API
+`DEPLOYED_API_URL=http://localhost:8000` (http/https, no embedded credentials or query string, validated before use).
+`DEPLOYED_API_ENV=<label>` names the target (shown in the report header); `prod`/`production` is refused.
+Read-only checks always run; tests that POST run only with `DEPLOYED_API_ALLOW_WRITES=1` (use disposable targets).
+Run: `pytest -ra -m deployment`.
+
+### OpenAPI contract
+`OPENAPI_SPEC_URL=<url or file>` is loaded, parsed (JSON, YAML fallback) and validated; unreachable, non-spec or
+invalid documents **fail** rather than skip. `OPENAPI_BASELINE_SPEC=<url or file>` (a trusted earlier spec) enables
+breaking-change detection (removed operations/statuses/fields, type changes, new required inputs, newly required auth).
+`contracts/practice_api.baseline.json` is a snapshot of this repo's own practice API only (see `contracts/README.md`).
+Run: `pytest -ra -m contract`.
+
+### Snowflake and ClickHouse
+`SNOWFLAKE_ACCOUNT`, `SNOWFLAKE_USER` plus `SNOWFLAKE_PASSWORD` or `SNOWFLAKE_PRIVATE_KEY_PATH` (+ optional
+warehouse/database/schema/role); `CLICKHOUSE_HOST` (+ port/user/password/database/secure). Partial configuration raises
+an error. Queries go through a guard that only permits a single read-only statement (SELECT/WITH/SHOW/DESCRIBE/EXPLAIN).
+Use a read-only role. Run: `pytest -ra -m warehouse`.
+
+### API security tests (simulated)
+`tests/test_auth_jwt.py` and `tests/test_auth_security.py` (marker `auth`) cover missing/invalid/expired/malformed/
+wrong-key/`alg=none` tokens, scopes, roles, spoofing, error-shape and information-leak checks. They run against the
+**controlled in-process practice app**, not a real backend. There is no per-user resource endpoint, so
+"another user's resources" tests are intentionally not included. Run: `pytest -ra -m auth`.
+
+### GitHub Actions
+`.github/workflows/ci.yml`: offline, PostgreSQL service, Docker container, and nightly/manual external jobs. Each job
+has a timeout and uploads JUnit XML + HTML reports (`if: always()`). Optional secrets/variables for the external job:
+`OPENAPI_SPEC_URL`, `OPENAPI_BASELINE_SPEC`, `DEPLOYED_API_URL`, `DEPLOYED_API_ENV`, `CLICKHOUSE_*`, `SNOWFLAKE_*`
+(Settings → Secrets and variables → Actions). No step prints the environment.

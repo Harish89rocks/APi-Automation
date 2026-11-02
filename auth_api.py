@@ -15,6 +15,56 @@ from urllib.parse import parse_qs
 import jwt
 from fastapi import APIRouter, Depends, HTTPException, Request, Response
 from fastapi.responses import JSONResponse
+from fastapi.security import HTTPAuthorizationCredentials, HTTPBearer
+from pydantic import BaseModel
+
+bearer_scheme = HTTPBearer(auto_error=False, bearerFormat="JWT")
+
+
+class ErrorDetail(BaseModel):
+    detail: str
+
+
+class OAuthError(BaseModel):
+    error: str
+    error_description: str
+
+
+class TokenResponse(BaseModel):
+    access_token: str
+    token_type: str
+    expires_in: int
+    scope: str
+
+
+class Identity(BaseModel):
+    sub: str
+    role: str | None
+    scope: str
+
+
+UNAUTHORIZED = {401: {"model": ErrorDetail, "description": "Missing, invalid, expired or revoked token"}}
+FORBIDDEN = {403: {"model": ErrorDetail, "description": "Authenticated but not permitted"}}
+
+TOKEN_FORM = {
+    "requestBody": {
+        "required": True,
+        "content": {
+            "application/x-www-form-urlencoded": {
+                "schema": {
+                    "type": "object",
+                    "required": ["grant_type", "client_id", "client_secret"],
+                    "properties": {
+                        "grant_type": {"type": "string", "enum": ["client_credentials"]},
+                        "client_id": {"type": "string"},
+                        "client_secret": {"type": "string"},
+                        "scope": {"type": "string"},
+                    },
+                }
+            }
+        },
+    }
+}
 
 ALGORITHM = "HS256"
 
@@ -81,7 +131,16 @@ def issue_token(client_id: str, client: Client, scopes: list[str]) -> str:
     return jwt.encode(claims, settings.secret, algorithm=ALGORITHM)
 
 
-@router.post("/auth/token", tags=["auth"])
+@router.post(
+    "/auth/token",
+    tags=["auth"],
+    response_model=TokenResponse,
+    responses={
+        400: {"model": OAuthError, "description": "Unsupported grant or invalid scope"},
+        401: {"model": OAuthError, "description": "Client authentication failed"},
+    },
+    openapi_extra=TOKEN_FORM,
+)
 async def token(request: Request):
     form = {k: v[0] for k, v in parse_qs((await request.body()).decode()).items()}
 
@@ -117,11 +176,12 @@ def _unauthorized(detail: str) -> HTTPException:
     )
 
 
-def authenticate(request: Request) -> dict:
-    header = request.headers.get("Authorization", "")
-    scheme, _, credentials = header.partition(" ")
-    if scheme.lower() != "bearer" or not credentials:
+def authenticate(
+    credentials_in: HTTPAuthorizationCredentials | None = Depends(bearer_scheme),
+) -> dict:
+    if credentials_in is None:
         raise _unauthorized("Missing bearer token")
+    credentials = credentials_in.credentials
     try:
         claims = jwt.decode(
             credentials,
@@ -140,7 +200,7 @@ def authenticate(request: Request) -> dict:
     return claims
 
 
-@router.post("/auth/revoke", tags=["auth"])
+@router.post("/auth/revoke", tags=["auth"], responses=UNAUTHORIZED)
 def revoke(claims: dict = Depends(authenticate)):
     settings.revoked.add(claims["jti"])
     return {"revoked": True}
@@ -157,16 +217,18 @@ def require(scope: str | None = None, role: str | None = None):
     return dependency
 
 
-@router.get("/me", tags=["auth"])
+@router.get("/me", tags=["auth"], response_model=Identity, responses=UNAUTHORIZED)
 def me(claims: dict = Depends(authenticate)):
     return {"sub": claims["sub"], "role": claims.get("role"), "scope": claims.get("scope", "")}
 
 
-@router.get("/reports", tags=["auth"])
+@router.get("/reports", tags=["auth"], responses={**UNAUTHORIZED, **FORBIDDEN})
 def reports(claims: dict = Depends(require(scope="reports:read"))):
     return {"reports": [], "requested_by": claims["sub"]}
 
 
-@router.delete("/admin/users/{user_id}", status_code=204, tags=["auth"])
+@router.delete(
+    "/admin/users/{user_id}", status_code=204, tags=["auth"], responses={**UNAUTHORIZED, **FORBIDDEN}
+)
 def delete_user(user_id: int, claims: dict = Depends(require(role="admin", scope="admin"))):
     return Response(status_code=204)

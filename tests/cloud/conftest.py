@@ -5,7 +5,14 @@ from unittest import mock
 
 import pytest
 
-from services.aws import make_client
+from optional_deps import require_module
+from services.aws import (
+    assert_expected_account,
+    bucket_prefix,
+    make_client,
+    require_test_owned,
+)
+from services.config import ConfigurationError
 
 FAKE_CREDENTIALS = {
     "AWS_ACCESS_KEY_ID": "testing",
@@ -19,12 +26,18 @@ FAKE_CREDENTIALS = {
 @pytest.fixture(scope="session")
 def aws_mode() -> str:
     """mock (default) | endpoint (AWS_ENDPOINT_URL) | real (AWS_TEST_MODE=real)."""
-    pytest.importorskip("boto3")
+    require_module("boto3")
     if os.getenv("AWS_TEST_MODE") == "real":
+        try:
+            assert_expected_account(
+                make_client("sts"), os.getenv("AWS_TEST_ALLOWED_ACCOUNT_ID")
+            )
+        except ConfigurationError as error:
+            pytest.fail(str(error), pytrace=False)
         return "real"
     if os.getenv("AWS_ENDPOINT_URL"):
         return "endpoint"
-    pytest.importorskip("moto")
+    require_module("moto")
     return "mock"
 
 
@@ -42,7 +55,7 @@ def _aws_environment(aws_mode):
 
 @pytest.fixture
 def unique_name() -> str:
-    return f"qa-{uuid.uuid4().hex[:10]}"
+    return f"{bucket_prefix()}{uuid.uuid4().hex[:10]}"
 
 
 @pytest.fixture
@@ -52,9 +65,12 @@ def s3(aws_mode):
 
 @pytest.fixture
 def bucket(s3, unique_name):
-    """A bucket that is emptied and deleted after the test."""
+    """A uniquely named, test-owned bucket, emptied and deleted after the test."""
+    require_test_owned(unique_name)
     s3.create_bucket(Bucket=unique_name)
     yield unique_name
+
+    require_test_owned(unique_name)
 
     paginator = s3.get_paginator("list_object_versions")
     for page in paginator.paginate(Bucket=unique_name):

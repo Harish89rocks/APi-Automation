@@ -169,7 +169,7 @@ def test_token_not_yet_valid_is_401(local_api):
 
 def test_tampered_payload_is_rejected(local_api):
     head, _, sig = login(local_api).split(".")
-    evil = jwt.encode({"sub": "reader", "role": "admin"}, "x", algorithm=ALGORITHM).split(".")[1]
+    evil = jwt.encode({"sub": "reader", "role": "admin"}, "x" * 32, algorithm=ALGORITHM).split(".")[1]
 
     assert local_api.get("/me", headers=bearer(f"{head}.{evil}.{sig}")).status_code == 401
 
@@ -190,6 +190,9 @@ def test_alg_none_token_is_rejected(local_api):
     assert local_api.get("/reports", headers=bearer(token)).status_code == 401
 
 
+# The real key is deliberately reused (to prove only the algorithm differs); it is
+# shorter than HS512 recommends, which PyJWT flags.
+@pytest.mark.filterwarnings("ignore:The HMAC key is:Warning")
 def test_other_hmac_algorithm_is_rejected(local_api):
     token = jwt.encode(
         {"iss": settings.issuer, "aud": settings.audience, "sub": "a", "jti": "1",

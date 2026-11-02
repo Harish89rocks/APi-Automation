@@ -17,6 +17,8 @@ concurrency:
 
 env:
   PYTHONDONTWRITEBYTECODE: "1"
+  # A missing optional package (boto3, moto...) must fail CI, not silently skip a suite.
+  REQUIRE_OPTIONAL_DEPS: "1"
 
 jobs:
   unit-and-contract:
@@ -33,7 +35,7 @@ jobs:
       - run: pip install -r requirements-cloud.txt
       - name: Run offline suite
         run: >
-          pytest -m "not external and not database and not deployment"
+          pytest -ra -m "not external and not database and not deployment"
           --junitxml=artifacts/junit-offline.xml
           --html=artifacts/report-offline.html --self-contained-html
       - uses: actions/upload-artifact@v5
@@ -74,7 +76,7 @@ jobs:
           POSTGRES_DB: qa
           POSTGRES_PASSWORD: ${{ secrets.CI_POSTGRES_PASSWORD || 'ci-ephemeral-only' }}
         run: >
-          pytest -m database -p no:cacheprovider
+          pytest -ra -m database -p no:cacheprovider
           --junitxml=artifacts/junit-database.xml
           --html=artifacts/report-database.html --self-contained-html
       - uses: actions/upload-artifact@v5
@@ -103,8 +105,10 @@ jobs:
       - name: Run deployment tests against the container
         env:
           DEPLOYED_API_URL: http://localhost:8001
+          DEPLOYED_API_ENV: ci-container
+          DEPLOYED_API_ALLOW_WRITES: "1"   # throwaway container created by this job
         run: >
-          pytest -m deployment
+          pytest -ra -m deployment
           --junitxml=artifacts/junit-deployment.xml
           --html=artifacts/report-deployment.html --self-contained-html
       - name: Capture container logs
@@ -133,8 +137,21 @@ jobs:
           cache-dependency-path: requirements-cloud.txt
       - run: pip install -r requirements-cloud.txt
       - name: Run external tests
+        # Optional secrets/variables; empty values mean "not configured" (suite skips).
+        # Nothing here is echoed, and no step dumps the environment.
+        env:
+          OPENAPI_SPEC_URL: ${{ vars.OPENAPI_SPEC_URL }}
+          OPENAPI_BASELINE_SPEC: ${{ vars.OPENAPI_BASELINE_SPEC }}
+          DEPLOYED_API_URL: ${{ vars.DEPLOYED_API_URL }}
+          DEPLOYED_API_ENV: ${{ vars.DEPLOYED_API_ENV }}
+          CLICKHOUSE_HOST: ${{ vars.CLICKHOUSE_HOST }}
+          CLICKHOUSE_USER: ${{ secrets.CLICKHOUSE_USER }}
+          CLICKHOUSE_PASSWORD: ${{ secrets.CLICKHOUSE_PASSWORD }}
+          SNOWFLAKE_ACCOUNT: ${{ secrets.SNOWFLAKE_ACCOUNT }}
+          SNOWFLAKE_USER: ${{ secrets.SNOWFLAKE_USER }}
+          SNOWFLAKE_PASSWORD: ${{ secrets.SNOWFLAKE_PASSWORD }}
         run: >
-          pytest -m external
+          pytest -ra -m external
           --junitxml=artifacts/junit-external.xml
           --html=artifacts/report-external.html --self-contained-html
       - uses: actions/upload-artifact@v5

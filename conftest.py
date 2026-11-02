@@ -1,4 +1,3 @@
-import json
 import os
 
 import pytest
@@ -6,6 +5,7 @@ import requests
 from fastapi.testclient import TestClient
 
 from api_client import APIClient
+from contract_utils import spec_from_env
 from practice_api import app
 
 DEFAULT_EXTERNAL_API_URL = "https://jsonplaceholder.typicode.com"
@@ -37,21 +37,14 @@ def openapi_spec() -> dict:
 
 @pytest.fixture(scope="session")
 def backend_openapi_spec() -> dict:
-    """Spec of a real backend service; skipped unless OPENAPI_SPEC_URL is set.
+    """Spec of a real backend (OPENAPI_SPEC_URL: http(s) URL or JSON/YAML file)."""
+    return spec_from_env("OPENAPI_SPEC_URL")
 
-    Accepts an http(s) URL or a local file path (JSON).
-    """
-    source = os.getenv("OPENAPI_SPEC_URL")
-    if not source:
-        pytest.skip("OPENAPI_SPEC_URL not set")
 
-    if source.startswith(("http://", "https://")):
-        response = requests.get(source, timeout=15)
-        response.raise_for_status()
-        return response.json()
-
-    with open(source, encoding="utf-8") as spec_file:
-        return json.load(spec_file)
+@pytest.fixture(scope="session")
+def baseline_openapi_spec() -> dict:
+    """Known-good earlier spec to compare against (OPENAPI_BASELINE_SPEC)."""
+    return spec_from_env("OPENAPI_BASELINE_SPEC")
 
 
 @pytest.fixture

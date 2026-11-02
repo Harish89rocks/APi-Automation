@@ -6,8 +6,24 @@ libraries are imported lazily so the rest of the suite works without them.
 """
 
 import os
+import re
 from contextlib import contextmanager
 from dataclasses import dataclass, field
+
+from services.config import require_complete
+
+_READ_ONLY = re.compile(r"^\s*(select|with|show|describe|desc|explain)\b", re.IGNORECASE)
+
+
+def ensure_read_only(sql: str) -> str:
+    """Reject anything but a single read-only statement (client-side safety net).
+
+    Use a read-only database role as the real control; this guards mistakes.
+    """
+    statement = sql.strip().rstrip(";")
+    if ";" in statement or not _READ_ONLY.match(statement):
+        raise ValueError("Only a single read-only statement is allowed in warehouse tests")
+    return sql
 
 
 @dataclass(frozen=True)
@@ -23,13 +39,19 @@ class SnowflakeSettings:
 
     @classmethod
     def from_env(cls) -> "SnowflakeSettings | None":
-        account, user = os.getenv("SNOWFLAKE_ACCOUNT"), os.getenv("SNOWFLAKE_USER")
-        if not (account and user):
+        names = [n for n in os.environ if n.startswith("SNOWFLAKE_")]
+        if not require_complete("Snowflake", names, ["SNOWFLAKE_ACCOUNT", "SNOWFLAKE_USER"]):
             return None
+        account, user = os.getenv("SNOWFLAKE_ACCOUNT"), os.getenv("SNOWFLAKE_USER")
         password = os.getenv("SNOWFLAKE_PASSWORD")
         key_path = os.getenv("SNOWFLAKE_PRIVATE_KEY_PATH")
         if not (password or key_path):
-            return None
+            from services.config import ConfigurationError
+
+            raise ConfigurationError(
+                "Snowflake is partly configured: set SNOWFLAKE_PASSWORD or "
+                "SNOWFLAKE_PRIVATE_KEY_PATH"
+            )
         return cls(
             account=account,
             user=user,
@@ -53,9 +75,10 @@ class ClickHouseSettings:
 
     @classmethod
     def from_env(cls) -> "ClickHouseSettings | None":
-        host = os.getenv("CLICKHOUSE_HOST")
-        if not host:
+        names = [n for n in os.environ if n.startswith("CLICKHOUSE_")]
+        if not require_complete("ClickHouse", names, ["CLICKHOUSE_HOST"]):
             return None
+        host = os.getenv("CLICKHOUSE_HOST")
         secure = os.getenv("CLICKHOUSE_SECURE", "").lower() in ("1", "true", "yes")
         return cls(
             host=host,
@@ -94,7 +117,7 @@ def snowflake_query(settings: SnowflakeSettings):
         def query(sql: str):
             cursor = connection.cursor()
             try:
-                cursor.execute(sql)
+                cursor.execute(ensure_read_only(sql))
                 return cursor.fetchall()
             finally:
                 cursor.close()
@@ -119,6 +142,6 @@ def clickhouse_query(settings: ClickHouseSettings):
         send_receive_timeout=60,
     )
     try:
-        yield lambda sql: client.query(sql).result_rows
+        yield lambda sql: client.query(ensure_read_only(sql)).result_rows
     finally:
         client.close()

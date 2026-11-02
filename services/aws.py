@@ -8,7 +8,40 @@ Modes (selected in tests/cloud/conftest.py):
 
 import os
 
+from services.config import ConfigurationError
+
 DEFAULT_REGION = "us-east-1"
+DEFAULT_BUCKET_PREFIX = "qa-"
+
+
+def bucket_prefix() -> str:
+    return os.getenv("AWS_TEST_BUCKET_PREFIX", DEFAULT_BUCKET_PREFIX)
+
+
+def require_test_owned(bucket: str) -> None:
+    """Cleanup guard: only buckets carrying the test prefix may be emptied/deleted."""
+    prefix = bucket_prefix()
+    if len(prefix) < 3 or not bucket.startswith(prefix):
+        raise RuntimeError(
+            f"Refusing to modify bucket {bucket!r}: not created by this test "
+            f"run (expected prefix {prefix!r}, minimum 3 characters)"
+        )
+
+
+def assert_expected_account(sts_client, expected_account_id: str | None) -> str:
+    """Real AWS only: refuse to run unless the caller is the allow-listed account."""
+    if not expected_account_id:
+        raise ConfigurationError(
+            "AWS_TEST_MODE=real requires AWS_TEST_ALLOWED_ACCOUNT_ID so tests "
+            "can never run against an unintended (e.g. production) account"
+        )
+    actual = sts_client.get_caller_identity()["Account"]
+    if actual != expected_account_id:
+        raise ConfigurationError(
+            f"Credentials belong to account {actual}, but "
+            f"AWS_TEST_ALLOWED_ACCOUNT_ID is {expected_account_id}; refusing to run"
+        )
+    return actual
 
 
 def region() -> str:
