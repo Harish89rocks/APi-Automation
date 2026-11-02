@@ -1,0 +1,33 @@
+# Local integration environment: API under test + PostgreSQL.
+#
+#   docker compose up -d --build --wait
+#   DEPLOYED_API_URL=http://localhost:8001 \
+#   POSTGRES_DSN=postgresql://postgres:${POSTGRES_PASSWORD:-qa_local_only}@localhost:5433/qa \
+#     pytest -m "deployment or database"
+#   docker compose down -v
+#
+# The default password is for this disposable local container only; override
+# it with POSTGRES_PASSWORD. Never reuse it for a shared database.
+services:
+  api:
+    build: .
+    ports:
+      - "8001:8001"
+    healthcheck:
+      test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://127.0.0.1:8001/health', timeout=2)"]
+      interval: 5s
+      timeout: 3s
+      retries: 10
+
+  postgres:
+    image: postgres:16-alpine
+    environment:
+      POSTGRES_DB: qa
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-qa_local_only}
+    ports:
+      - "127.0.0.1:5433:5432"
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U postgres -d qa"]
+      interval: 5s
+      timeout: 3s
+      retries: 10

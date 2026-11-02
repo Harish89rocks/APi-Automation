@@ -1,0 +1,145 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+  schedule:
+    - cron: "0 2 * * *"   # nightly: includes tests that call external services
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
+env:
+  PYTHONDONTWRITEBYTECODE: "1"
+
+jobs:
+  unit-and-contract:
+    name: Unit, contract and local API tests
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+          cache: pip
+          cache-dependency-path: requirements-cloud.txt
+      - run: pip install -r requirements-cloud.txt
+      - name: Run offline suite
+        run: >
+          pytest -m "not external and not database and not deployment"
+          --junitxml=artifacts/junit-offline.xml
+          --html=artifacts/report-offline.html --self-contained-html
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: offline-reports
+          path: artifacts/
+          if-no-files-found: warn
+
+  postgres-integration:
+    name: PostgreSQL integration tests
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    services:
+      postgres:
+        image: postgres:16-alpine
+        env:
+          POSTGRES_DB: qa
+          POSTGRES_PASSWORD: ${{ secrets.CI_POSTGRES_PASSWORD || 'ci-ephemeral-only' }}
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd "pg_isready -U postgres -d qa"
+          --health-interval 5s
+          --health-timeout 3s
+          --health-retries 10
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+          cache: pip
+          cache-dependency-path: requirements-cloud.txt
+      - run: pip install -r requirements-cloud.txt
+      - name: Run database tests
+        env:
+          POSTGRES_HOST: localhost
+          POSTGRES_DB: qa
+          POSTGRES_PASSWORD: ${{ secrets.CI_POSTGRES_PASSWORD || 'ci-ephemeral-only' }}
+        run: >
+          pytest -m database -p no:cacheprovider
+          --junitxml=artifacts/junit-database.xml
+          --html=artifacts/report-database.html --self-contained-html
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: database-reports
+          path: artifacts/
+          if-no-files-found: warn
+
+  docker-deployment:
+    name: Build image and smoke-test the container
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+          cache: pip
+          cache-dependency-path: requirements-cloud.txt
+      - run: pip install -r requirements-cloud.txt
+      - name: Build image
+        run: docker build -t practice-api:ci .
+      - name: Start container
+        run: docker run -d --name practice-api -p 8001:8001 practice-api:ci
+      - name: Run deployment tests against the container
+        env:
+          DEPLOYED_API_URL: http://localhost:8001
+        run: >
+          pytest -m deployment
+          --junitxml=artifacts/junit-deployment.xml
+          --html=artifacts/report-deployment.html --self-contained-html
+      - name: Capture container logs
+        if: always()
+        run: |
+          mkdir -p artifacts
+          docker logs practice-api > artifacts/container.log 2>&1 || true
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: deployment-reports
+          path: artifacts/
+          if-no-files-found: warn
+
+  external:
+    name: External API tests (nightly / manual)
+    if: github.event_name == 'schedule' || github.event_name == 'workflow_dispatch'
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+          cache: pip
+          cache-dependency-path: requirements-cloud.txt
+      - run: pip install -r requirements-cloud.txt
+      - name: Run external tests
+        run: >
+          pytest -m external
+          --junitxml=artifacts/junit-external.xml
+          --html=artifacts/report-external.html --self-contained-html
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: external-reports
+          path: artifacts/
+          if-no-files-found: warn

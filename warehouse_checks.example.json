@@ -1,0 +1,25 @@
+{
+  "snowflake": {
+    "tables": [
+      {
+        "name": "MY_DB.MY_SCHEMA.USERS",
+        "min_rows": 1,
+        "not_null": ["ID", "EMAIL"],
+        "unique": [["ID"]],
+        "freshness": {"column": "UPDATED_AT", "max_age_hours": 24}
+      }
+    ]
+  },
+  "clickhouse": {
+    "tables": [
+      {
+        "name": "default.events",
+        "min_rows": 1,
+        "not_null": ["event_id"],
+        "unique": [["event_id"]],
+        "ranges": [{"column": "duration_ms", "min": 0, "max": 60000}],
+        "freshness": {"column": "event_time", "max_age_hours": 1}
+      }
+    ]
+  }
+}
