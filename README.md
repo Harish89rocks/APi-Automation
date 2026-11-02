@@ -1,5 +1,7 @@
 # API Automation Framework
 
+[![CI](https://github.com/Harish89rocks/APi-Automation/actions/workflows/ci.yml/badge.svg)](https://github.com/Harish89rocks/APi-Automation/actions/workflows/ci.yml)
+
 Python 3.11 + pytest. Sync (`requests`) and async (`httpx`) clients, retry policy,
 Pydantic validation, JSON logging.
 

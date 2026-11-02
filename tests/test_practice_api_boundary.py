@@ -60,14 +60,6 @@ def test_email_local_part_at_64_chars_is_accepted(local_api):
     assert response.status_code == 201
 
 
-@pytest.mark.xfail(
-    strict=True,
-    reason=(
-        "KNOWN DEFECT: practice_api accepts a local part >64 chars "
-        "(RFC 5321 limit); email-validator 2.3.0 does not enforce it. "
-        "Add an explicit length check to User.email to fix."
-    ),
-)
 def test_email_local_part_over_64_chars_is_rejected(local_api):
     email = f"{'a' * 65}@example.com"
 
